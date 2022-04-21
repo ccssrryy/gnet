@@ -108,6 +108,24 @@ func (el *eventloop) run(lockOSThread bool) {
 			// In either case write() should take care of it properly:
 			// 1) writing data back,
 			// 2) closing the connection.
+			if !c.opened {
+				if ev&netpoll.ErrEvents != 0 {
+					return el.handleConnectError(fd, ev, c)
+				}
+
+				if c.outboundBuffer.IsEmpty() {
+					err := el.poller.ModRead(c.pollAttachment)
+					if err != nil {
+						return err
+					}
+				}
+
+				err := el.open(c)
+				if err != nil {
+					return nil
+				}
+
+			}
 			if ev&netpoll.OutEvents != 0 && !c.outboundBuffer.IsEmpty() {
 				if err := el.write(c); err != nil {
 					return err

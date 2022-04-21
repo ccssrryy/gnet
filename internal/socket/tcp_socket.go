@@ -123,6 +123,9 @@ func tcpSocket(proto, addr string, passive bool, sockOpts ...Option) (fd int, ne
 		return
 	}
 	defer func() {
+		if t, ok := err.(*os.SyscallError); ok && t.Err == unix.EINPROGRESS {
+			return
+		}
 		if err != nil {
 			_ = unix.Close(fd)
 		}
@@ -140,11 +143,10 @@ func tcpSocket(proto, addr string, passive bool, sockOpts ...Option) (fd int, ne
 		}
 	}
 
-	if err = os.NewSyscallError("bind", unix.Bind(fd, sa)); err != nil {
-		return
-	}
-
 	if passive {
+		if err = os.NewSyscallError("bind", unix.Bind(fd, sa)); err != nil {
+			return
+		}
 		// Set backlog size to the maximum.
 		err = os.NewSyscallError("listen", unix.Listen(fd, listenerBacklogMaxSize))
 	} else {
