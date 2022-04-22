@@ -130,6 +130,15 @@ func (c *conn) open(buf []byte) error {
 }
 
 func (c *conn) write(data []byte) (n int, err error) {
+	// connection is not ready but data is available
+	// so we write data to buffer
+	// there may should add a max buffer size limit
+	state := c.GetConnctionState()
+	if state == CONNECTION_STATE_INITIAL ||
+		state == CONNECTION_STATE_CONNECTING {
+		return c.outboundBuffer.Write(data)
+	}
+
 	n = len(data)
 	// If there is pending data in outbound buffer, the current data ought to be appended to the outbound buffer
 	// for maintaining the sequence of network packets.
@@ -157,6 +166,15 @@ func (c *conn) write(data []byte) (n int, err error) {
 }
 
 func (c *conn) writev(bs [][]byte) (n int, err error) {
+	// connection is not ready but data is available
+	// so we write data to buffer
+	// there may should add a max buffer size limit
+	state := c.GetConnctionState()
+	if state == CONNECTION_STATE_INITIAL ||
+		state == CONNECTION_STATE_CONNECTING {
+		return c.outboundBuffer.Writev(bs)
+	}
+
 	for _, b := range bs {
 		n += len(b)
 	}
@@ -202,9 +220,6 @@ type asyncWriteHook struct {
 }
 
 func (c *conn) asyncWrite(itf interface{}) (err error) {
-	if c.GetConnctionState() != CONNECTION_STATE_CONNECTED {
-		return nil
-	}
 
 	hook := itf.(*asyncWriteHook)
 	_, err = c.write(hook.data)
@@ -220,9 +235,6 @@ type asyncWritevHook struct {
 }
 
 func (c *conn) asyncWritev(itf interface{}) (err error) {
-	if c.GetConnctionState() != CONNECTION_STATE_CONNECTED {
-		return nil
-	}
 
 	hook := itf.(*asyncWritevHook)
 	_, err = c.writev(hook.data)
@@ -348,14 +360,6 @@ func (c *conn) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 
-	// connection is not ready but data is available
-	// so we write data to buffer
-	// there may should add a max buffer size limit
-	state := c.GetConnctionState()
-	if state == CONNECTION_STATE_INITIAL ||
-		state == CONNECTION_STATE_CONNCTING {
-		return c.outboundBuffer.Write(p)
-	}
 	return c.write(p)
 }
 
@@ -471,8 +475,8 @@ func (c *conn) CloseWithCallback(callback AsyncCallback) error {
 
 func (c *conn) Close() error {
 	return c.loop.poller.Trigger(func(_ interface{}) (err error) {
-		if c.GetConnctionState() == CONNECTION_STATE_CONNCTING {
-			c.loop.poller.Trigger(func(_ interface{}) error {
+		if c.GetConnctionState() == CONNECTION_STATE_CONNECTING {
+			err = c.loop.poller.Trigger(func(_ interface{}) error {
 				return c.Close()
 			}, nil)
 		} else {

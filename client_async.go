@@ -260,7 +260,7 @@ func (el *eventloop) registerAsyncClient(itf interface{}) error {
 		return nil
 	}
 
-	c.connState = CONNECTION_STATE_CONNCTING
+	c.connState = CONNECTION_STATE_CONNECTING
 	el.connections[c.fd] = c
 
 	if err := el.poller.AddReadWrite(c.pollAttachment); err != nil {
