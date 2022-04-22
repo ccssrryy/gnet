@@ -205,10 +205,10 @@ func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 		return
 	}
 
-	// ignore close request of connection state which is connecting or connected
+	// ignore close request of connection state which is not connecting and connected
 	state := c.GetConnctionState()
-	if state != CONNECTION_STATE_CONNECTED ||
-		state == CONNECTION_STATE_CONNCTING {
+	if state != CONNECTION_STATE_CONNECTED &&
+		state != CONNECTION_STATE_CONNCTING {
 		return
 	}
 
