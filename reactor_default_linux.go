@@ -108,7 +108,7 @@ func (el *eventloop) run(lockOSThread bool) {
 			// In either case write() should take care of it properly:
 			// 1) writing data back,
 			// 2) closing the connection.
-			if !c.opened {
+			if c.GetConnctionState() == CONNECTION_STATE_CONNCTING {
 				if ev&netpoll.ErrEvents != 0 {
 					return el.handleConnectError(fd, ev, c)
 				}

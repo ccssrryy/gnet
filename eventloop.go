@@ -32,6 +32,7 @@ import (
 
 	"github.com/panjf2000/gnet/v2/internal/io"
 	"github.com/panjf2000/gnet/v2/internal/netpoll"
+	"github.com/panjf2000/gnet/v2/internal/socket"
 	gerrors "github.com/panjf2000/gnet/v2/pkg/errors"
 	"github.com/panjf2000/gnet/v2/pkg/logging"
 )
@@ -95,8 +96,24 @@ func (el *eventloop) register(itf interface{}) error {
 }
 
 func (el *eventloop) open(c *conn) error {
-	c.opened = true
+	c.connState = CONNECTION_STATE_CONNECTED
 	el.addConn(1)
+
+	// set addr info for client connection
+	if c.localAddr == nil {
+		la, err := unix.Getsockname(c.fd)
+		if err != nil {
+			return err
+		}
+		c.localAddr = socket.SockaddrToTCPOrUnixAddr(la)
+	}
+	if c.remoteAddr == nil {
+		ra, err := unix.Getpeername(c.fd)
+		if err != nil {
+			return err
+		}
+		c.remoteAddr = socket.SockaddrToTCPOrUnixAddr(ra)
+	}
 
 	out, action := el.eventHandler.OnOpen(c)
 	if out != nil {
@@ -188,7 +205,10 @@ func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 		return
 	}
 
-	if !c.opened {
+	// ignore close request of connection state which is connecting or connected
+	state := c.GetConnctionState()
+	if state != CONNECTION_STATE_CONNECTED ||
+		state == CONNECTION_STATE_CONNCTING {
 		return
 	}
 

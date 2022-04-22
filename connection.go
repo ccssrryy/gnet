@@ -40,7 +40,7 @@ type conn struct {
 	peer           unix.Sockaddr           // remote socket address
 	loop           *eventloop              // connected event-loop
 	buffer         []byte                  // buffer for the latest bytes
-	opened         bool                    // connection opened event fired
+	connState      ConnectionState         // connection opened event fired
 	localAddr      net.Addr                // local addr
 	remoteAddr     net.Addr                // remote addr
 	isDatagram     bool                    // UDP protocol
@@ -64,7 +64,7 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr n
 }
 
 func (c *conn) releaseTCP() {
-	c.opened = false
+	c.connState = CONNECTION_STATE_CLOSED
 	c.peer = nil
 	c.ctx = nil
 	c.buffer = nil
@@ -95,6 +95,9 @@ func newUDPConn(fd int, el *eventloop, localAddr net.Addr, sa unix.Sockaddr, con
 		c.peer = nil
 	}
 	return
+}
+func (c *conn) GetConnctionState() ConnectionState {
+	return c.connState
 }
 
 func (c *conn) releaseUDP() {
@@ -199,7 +202,7 @@ type asyncWriteHook struct {
 }
 
 func (c *conn) asyncWrite(itf interface{}) (err error) {
-	if !c.opened {
+	if c.GetConnctionState() != CONNECTION_STATE_CONNECTED {
 		return nil
 	}
 
@@ -217,7 +220,7 @@ type asyncWritevHook struct {
 }
 
 func (c *conn) asyncWritev(itf interface{}) (err error) {
-	if !c.opened {
+	if c.GetConnctionState() != CONNECTION_STATE_CONNECTED {
 		return nil
 	}
 
@@ -344,6 +347,15 @@ func (c *conn) Write(p []byte) (int, error) {
 		}
 		return len(p), nil
 	}
+
+	// connection is not ready but data is available
+	// so we write data to buffer
+	// there may should add a max buffer size limit
+	state := c.GetConnctionState()
+	if state == CONNECTION_STATE_INITIAL ||
+		state == CONNECTION_STATE_CONNCTING {
+		return c.outboundBuffer.Write(p)
+	}
 	return c.write(p)
 }
 
@@ -459,7 +471,13 @@ func (c *conn) CloseWithCallback(callback AsyncCallback) error {
 
 func (c *conn) Close() error {
 	return c.loop.poller.Trigger(func(_ interface{}) (err error) {
-		err = c.loop.closeConn(c, nil)
+		if c.GetConnctionState() == CONNECTION_STATE_CONNCTING {
+			c.loop.poller.Trigger(func(_ interface{}) error {
+				return c.Close()
+			}, nil)
+		} else {
+			err = c.loop.closeConn(c, nil)
+		}
 		return
 	}, nil)
 }

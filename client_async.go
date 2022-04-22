@@ -24,10 +24,8 @@ import (
 	"log"
 	"net"
 	"os"
-	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 
@@ -139,17 +137,27 @@ func (cli *ClientAsync) Stop() (err error) {
 	logging.Cleanup()
 	return
 }
+func (cli *ClientAsync) Dial(network, address string) (Conn, error) {
+	return cli.dial(network, address, nil)
+}
 
-func (cli *ClientAsync) DialIpv4(network, address string) (Conn, error) {
+// callback called before registering to poller and after conn created.
+func (cli *ClientAsync) DialWithCallback(network, address string, callback func(Conn) error) (Conn, error) {
+	return cli.dial(network, address, callback)
+}
+
+func (cli *ClientAsync) dial(network, address string, callback func(Conn) error) (Conn, error) {
 	var (
 		fd             int
 		remoteAddr     net.Addr
 		localSockAddr  unix.Sockaddr
 		remoteSockAddr unix.Sockaddr
 		err            error
+		isTCP          bool
 	)
 	switch strings.ToLower(network) {
 	case "tcp", "tcp4", "tcp6":
+		isTCP = true
 		fd, remoteAddr, err = socket.TCPSocket(network, address, false)
 	case "udp", "udp4", "udp6":
 		fd, remoteAddr, err = socket.UDPSocket(network, address, false)
@@ -168,7 +176,7 @@ func (cli *ClientAsync) DialIpv4(network, address string) (Conn, error) {
 		return nil, err
 	}
 
-	if err != unix.EINPROGRESS {
+	if err == nil {
 		localSockAddr, err = unix.Getsockname(fd)
 		if err != nil {
 			log.Println("get sockname error", err)
@@ -180,98 +188,47 @@ func (cli *ClientAsync) DialIpv4(network, address string) (Conn, error) {
 		}
 	}
 
-	conn := newClientTCPConn(fd, cli.el, remoteSockAddr, socket.SockaddrToTCPOrUnixAddr(localSockAddr), remoteAddr)
-
-	if err == unix.EINPROGRESS {
-		cli.el.poller.UrgentTrigger(cli.el.registerAsyncClient, conn)
-		return conn, nil
-	}
-	return conn, nil
-}
-
-// Dial is like net.Dial().
-func (cli *ClientAsync) Dial(network, address string) (Conn, error) {
-	c, err := net.Dial(network, address)
-	if err != nil {
-		return nil, err
-	}
-	defer c.Close()
-
-	sc, ok := c.(syscall.Conn)
-	if !ok {
-		return nil, errors.New("failed to convert net.Conn to syscall.Conn")
-	}
-	rc, err := sc.SyscallConn()
-	if err != nil {
-		return nil, errors.New("failed to get syscall.RawConn from net.Conn")
-	}
-
-	var DupFD int
-	e := rc.Control(func(fd uintptr) {
-		DupFD, err = unix.Dup(int(fd))
-	})
-	if err != nil {
-		return nil, err
-	}
-	if e != nil {
-		return nil, e
-	}
-
-	if strings.HasPrefix(network, "tcp") {
+	if isTCP {
 		if cli.opts.TCPNoDelay == TCPDelay {
-			if err = socket.SetNoDelay(DupFD, 0); err != nil {
+			if err = socket.SetNoDelay(fd, 0); err != nil {
 				return nil, err
 			}
 		}
 		if cli.opts.TCPKeepAlive > 0 {
-			if err = socket.SetKeepAlivePeriod(DupFD, int(cli.opts.TCPKeepAlive.Seconds())); err != nil {
+			if err = socket.SetKeepAlivePeriod(fd, int(cli.opts.TCPKeepAlive.Seconds())); err != nil {
 				return nil, err
 			}
 		}
 	}
 
 	if cli.opts.SocketSendBuffer > 0 {
-		if err = socket.SetSendBuffer(DupFD, cli.opts.SocketSendBuffer); err != nil {
+		if err = socket.SetSendBuffer(fd, cli.opts.SocketSendBuffer); err != nil {
 			return nil, err
 		}
 	}
 	if cli.opts.SocketRecvBuffer > 0 {
-		if err = socket.SetRecvBuffer(DupFD, cli.opts.SocketRecvBuffer); err != nil {
+		if err = socket.SetRecvBuffer(fd, cli.opts.SocketRecvBuffer); err != nil {
 			return nil, err
 		}
 	}
 
-	var (
-		sockAddr unix.Sockaddr
-		gc       Conn
-	)
-	switch c.(type) {
-	case *net.UnixConn:
-		if sockAddr, _, _, err = socket.GetUnixSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String()); err != nil {
-			return nil, err
+	conn := newClientTCPConn(fd, cli.el, remoteSockAddr, socket.SockaddrToTCPOrUnixAddr(localSockAddr), remoteAddr)
+
+	if callback != nil {
+		err := callback(conn)
+		if err != nil {
+			return conn, err
 		}
-		ua := c.LocalAddr().(*net.UnixAddr)
-		ua.Name = c.RemoteAddr().String() + "." + strconv.Itoa(DupFD)
-		gc = newTCPConn(DupFD, cli.el, sockAddr, c.LocalAddr(), c.RemoteAddr())
-	case *net.TCPConn:
-		if sockAddr, _, _, _, err = socket.GetTCPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String()); err != nil {
-			return nil, err
-		}
-		gc = newTCPConn(DupFD, cli.el, sockAddr, c.LocalAddr(), c.RemoteAddr())
-	case *net.UDPConn:
-		if sockAddr, _, _, _, err = socket.GetUDPSockAddr(c.RemoteAddr().Network(), c.RemoteAddr().String()); err != nil {
-			return nil, err
-		}
-		gc = newUDPConn(DupFD, cli.el, c.LocalAddr(), sockAddr, true)
-	default:
-		return nil, gerrors.ErrUnsupportedProtocol
 	}
-	err = cli.el.poller.UrgentTrigger(cli.el.register, gc)
-	if err != nil {
-		gc.Close()
-		return nil, err
+
+	if err == unix.EINPROGRESS {
+		err := cli.el.poller.UrgentTrigger(cli.el.registerAsyncClient, conn)
+		if err != nil {
+			conn.Close()
+			return nil, err
+		}
 	}
-	return gc, nil
+	return conn, nil
 }
 
 func newClientTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
@@ -285,7 +242,6 @@ func newClientTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remote
 	c.outboundBuffer, _ = elastic.New(el.engine.opts.WriteBufferCap)
 	c.pollAttachment = netpoll.GetPollAttachment()
 	c.pollAttachment.FD = fd
-	// c.pollAttachment.Callback = c.handleAsyncClientEvents
 	return
 }
 
@@ -303,38 +259,17 @@ func (el *eventloop) registerAsyncClient(itf interface{}) error {
 		el.udpSockets[c.fd] = c
 		return nil
 	}
+
+	c.connState = CONNECTION_STATE_CONNCTING
+	el.connections[c.fd] = c
+
 	if err := el.poller.AddReadWrite(c.pollAttachment); err != nil {
 		_ = unix.Close(c.fd)
 		c.releaseTCP()
 		return err
 	}
-	logging.Debugf("registerAsyncClient: %v", c.fd)
-	el.connections[c.fd] = c
-	// return el.open(c)
 	return nil
 }
-
-// func (c *conn) handleAsyncClientEvents(_ int, ev uint32) error {
-// 	logging.Debugf("handleAsyncClientEvents are called")
-
-// 	if ev&netpoll.InEvents != 0 {
-// 		n, _, err := unix.Recvfrom(c.fd, make([]byte, 1), unix.MSG_PEEK)
-// 		if err != nil {
-// 			return err
-// 		}
-// 		if n == 0 {
-// 			return io.EOF
-// 		}
-// 	} else if ev&netpoll.OutEvents == 0 {
-// 		return errors.New("unexpected event")
-// 	}
-// 	err := c.loop.open(c)
-// 	if err != nil {
-// 		return err
-// 	}
-
-// 	return nil
-// }
 
 func (el *eventloop) handleConnectError(fd int, ev uint32, c *conn) error {
 	var (

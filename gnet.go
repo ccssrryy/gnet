@@ -43,6 +43,15 @@ const (
 	Shutdown
 )
 
+type ConnectionState int
+
+const (
+	CONNECTION_STATE_INITIAL ConnectionState = iota
+	CONNECTION_STATE_CONNCTING
+	CONNECTION_STATE_CONNECTED
+	CONNECTION_STATE_CLOSED
+)
+
 // Engine represents an engine context which provides some functions.
 type Engine struct {
 	// eng is the internal engine struct.
@@ -231,6 +240,8 @@ type Conn interface {
 
 	// Close closes the current connection, implements net.Conn.
 	Close() (err error)
+
+	GetConnctionState() ConnectionState
 }
 
 type (
