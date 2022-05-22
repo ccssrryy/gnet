@@ -162,7 +162,6 @@ func (cli *ClientAsync) dial(network, address string, callback func(Conn) error)
 	case "udp", "udp4", "udp6":
 		fd, remoteAddr, err = socket.UDPSocket(network, address, false)
 	case "unix":
-		_ = os.RemoveAll(address)
 		fd, remoteAddr, err = socket.UnixSocket(network, address, false)
 	default:
 		err = errors.New("unsupported network: " + network)
@@ -221,12 +220,10 @@ func (cli *ClientAsync) dial(network, address string, callback func(Conn) error)
 		}
 	}
 
-	if err == unix.EINPROGRESS {
-		err := cli.el.poller.UrgentTrigger(cli.el.registerAsyncClient, conn)
-		if err != nil {
-			conn.Close()
-			return nil, err
-		}
+	err = cli.el.poller.UrgentTrigger(cli.el.registerAsyncClient, conn)
+	if err != nil {
+		conn.Close()
+		return nil, err
 	}
 	return conn, nil
 }
@@ -277,7 +274,7 @@ func (el *eventloop) handleConnectError(fd int, ev uint32, c *conn) error {
 		rerr error
 	)
 	// TODO set correct error
-	err = os.NewSyscallError("connect", errors.New("connect error"))
+	err = os.NewSyscallError("connect", fmt.Errorf("connect error: %s", c.remoteAddr.String()))
 	err0, err1 := el.poller.Delete(c.fd), unix.Close(c.fd)
 	if err0 != nil {
 		rerr = fmt.Errorf("failed to delete fd=%d from poller in event-loop(%d): %v", c.fd, el.idx, err0)

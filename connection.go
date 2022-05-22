@@ -138,6 +138,9 @@ func (c *conn) write(data []byte) (n int, err error) {
 		state == CONNECTION_STATE_CONNECTING {
 		return c.outboundBuffer.Write(data)
 	}
+	if state == CONNECTION_STATE_CLOSED {
+		return -1, nil
+	}
 
 	n = len(data)
 	// If there is pending data in outbound buffer, the current data ought to be appended to the outbound buffer
@@ -271,6 +274,17 @@ func (c *conn) Read(p []byte) (n int, err error) {
 	m := copy(p[n:], c.buffer)
 	n += m
 	c.buffer = c.buffer[m:]
+	return
+}
+
+func (c *conn) WriteInBuffer(p []byte) (n int, err error) {
+	n, err = c.inboundBuffer.Write(c.buffer)
+	if err != nil || n != len(c.buffer) {
+		return 0, err
+	}
+
+	n, err = c.inboundBuffer.Write(p)
+	c.buffer = c.buffer[:0]
 	return
 }
 

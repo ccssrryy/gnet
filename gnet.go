@@ -229,6 +229,8 @@ type Conn interface {
 	// SetWriteDeadline implements net.Conn.
 	SetWriteDeadline(t time.Time) (err error)
 
+	WriteInBuffer(p []byte) (n int, err error)
+
 	// ==================================== Concurrency-safe API's ====================================
 
 	// Wake triggers a OnTraffic event for the connection.
