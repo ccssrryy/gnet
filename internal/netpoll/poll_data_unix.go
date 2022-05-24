@@ -39,7 +39,8 @@ func PutPollAttachment(pa *PollAttachment) {
 
 // PollAttachment is the user data which is about to be stored in "void *ptr" of epoll_data or "void *udata" of kevent.
 type PollAttachment struct {
-	FD       int
+	FD int
+	// Used to cache read/write event and avoid extra epoll_ctl syscalls
 	Events   uint32
 	Callback PollEventHandler
 }
