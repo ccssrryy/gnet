@@ -47,6 +47,8 @@ type conn struct {
 	inboundBuffer  elastic.RingBuffer      // buffer for leftover data from the peer
 	outboundBuffer *elastic.Buffer         // buffer for data that is eligible to be sent to the peer
 	pollAttachment *netpoll.PollAttachment // connection attachment for poller
+	readStrategy   ReadStrategy
+	writeStrategy  WriteStrategy
 }
 
 func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr net.Addr) (c *conn) {
@@ -61,6 +63,14 @@ func newTCPConn(fd int, el *eventloop, sa unix.Sockaddr, localAddr, remoteAddr n
 	c.pollAttachment = netpoll.GetPollAttachment()
 	c.pollAttachment.FD, c.pollAttachment.Callback = fd, c.handleEvents
 	return
+}
+
+func (c *conn) SetReadStrategy(rs ReadStrategy) {
+	c.readStrategy = rs
+}
+
+func (c *conn) SetWriteStrategy(ws WriteStrategy) {
+	c.writeStrategy = ws
 }
 
 func (c *conn) releaseTCP() {
@@ -129,20 +139,39 @@ func (c *conn) open(buf []byte) error {
 	return err
 }
 
+func (c *conn) checkAfterWrite(n int) (err error) {
+	// there is no need to add write event
+	left := c.OutboundBuffered()
+	if c.writeStrategy != nil {
+		c.writeStrategy(left, n)
+	}
+	return
+}
+
 func (c *conn) write(data []byte) (n int, err error) {
+
 	// connection is not ready but data is available
 	// so we write data to buffer
 	// there may should add a max buffer size limit
 	state := c.GetConnctionState()
+	if state == CONNECTION_STATE_CLOSED {
+		// return -1, fmt.Errorf("write on closed connection")
+		return -1, nil
+	}
+
+	defer func() {
+		if err != nil {
+			return
+		}
+		err = c.checkAfterWrite(n)
+	}()
+
+	n = len(data)
+
 	if state == CONNECTION_STATE_INITIAL ||
 		state == CONNECTION_STATE_CONNECTING {
 		return c.outboundBuffer.Write(data)
 	}
-	if state == CONNECTION_STATE_CLOSED {
-		return -1, nil
-	}
-
-	n = len(data)
 	// If there is pending data in outbound buffer, the current data ought to be appended to the outbound buffer
 	// for maintaining the sequence of network packets.
 	if !c.outboundBuffer.IsEmpty() {
@@ -261,7 +290,29 @@ func (c *conn) resetBuffer() {
 
 // ================================== Non-concurrency-safe API's ==================================
 
+func (c *conn) checkAfterRead(n int) (err error) {
+	var ok bool = true
+	left := c.inboundBuffer.Buffered() + len(c.buffer)
+	if c.readStrategy != nil {
+		ok = c.readStrategy(left, n)
+	}
+	if ok || left == 0 {
+		err = c.loop.poller.AddRead(c.pollAttachment)
+	} else {
+		err = c.loop.poller.Delete(c.fd)
+	}
+	return
+}
+
 func (c *conn) Read(p []byte) (n int, err error) {
+
+	defer func() {
+		if err != nil {
+			return
+		}
+		err = c.checkAfterRead(n)
+	}()
+
 	if c.inboundBuffer.IsEmpty() {
 		n = copy(p, c.buffer)
 		c.buffer = c.buffer[n:]
@@ -490,9 +541,13 @@ func (c *conn) CloseWithCallback(callback AsyncCallback) error {
 func (c *conn) Close() error {
 	return c.loop.poller.Trigger(func(_ interface{}) (err error) {
 		if c.GetConnctionState() == CONNECTION_STATE_CONNECTING {
-			err = c.loop.poller.Trigger(func(_ interface{}) error {
-				return c.Close()
-			}, nil)
+			//err = c.loop.poller.Trigger(func(_ interface{}) error {
+			// FIXME why?
+			// return c.Close()
+			// }, nil)
+			// hack for close connecting fd
+			c.loop.addConn(1)
+			err = c.loop.closeConn(c, nil)
 		} else {
 			err = c.loop.closeConn(c, nil)
 		}

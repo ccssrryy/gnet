@@ -214,6 +214,7 @@ func (el *eventloop) closeConn(c *conn, err error) (rerr error) {
 
 	// Send residual data in buffer back to the peer before actually closing the connection.
 	if !c.outboundBuffer.IsEmpty() {
+		el.getLogger().Warnf("close connection when data is not empty")
 		for !c.outboundBuffer.IsEmpty() {
 			iov := c.outboundBuffer.Peek(0)
 			if len(iov) > iovMax {

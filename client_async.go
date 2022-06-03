@@ -69,7 +69,7 @@ func NewClientAsync(eventHandler EventHandler, opts ...Option) (cli *ClientAsync
 	eng := new(engine)
 	eng.opts = options
 	eng.eventHandler = eventHandler
-	eng.ln = &listener{network: "udp"}
+	eng.ln = &listener{network: "tcp"}
 	eng.cond = sync.NewCond(&sync.Mutex{})
 	if options.Ticker {
 		eng.tickerCtx, eng.cancelTicker = context.WithCancel(context.Background())
@@ -257,14 +257,15 @@ func (el *eventloop) registerAsyncClient(itf interface{}) error {
 		return nil
 	}
 
-	c.connState = CONNECTION_STATE_CONNECTING
-	el.connections[c.fd] = c
-
 	if err := el.poller.AddReadWrite(c.pollAttachment); err != nil {
 		_ = unix.Close(c.fd)
 		c.releaseTCP()
 		return err
 	}
+
+	c.connState = CONNECTION_STATE_CONNECTING
+	el.connections[c.fd] = c
+
 	return nil
 }
 

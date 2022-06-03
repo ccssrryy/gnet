@@ -151,6 +151,12 @@ type Writer interface {
 // Note that the parameter gnet.Conn is already released under UDP protocol, thus it's not allowed to be accessed.
 type AsyncCallback func(c Conn) error
 
+// ReadStrategy is a strategy for connection to controll if we should conitnue reading from connection
+type ReadStrategy func(left, current int) bool
+
+// WriteStrategy is a strategy for connection to controll if we should conitnue reading from connection
+type WriteStrategy func(left, current int) bool
+
 // Socket is a set of functions which manipulate the underlying file descriptor of a connection.
 type Socket interface {
 	// Fd returns the underlying file descriptor.
@@ -244,6 +250,10 @@ type Conn interface {
 	Close() (err error)
 
 	GetConnctionState() ConnectionState
+
+	SetReadStrategy(rs ReadStrategy)
+
+	SetWriteStrategy(ws WriteStrategy)
 }
 
 type (
